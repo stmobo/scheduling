@@ -7,7 +7,7 @@ from typing import List, Tuple, Dict
 
 import workflow
 from workflow import ExperimentJob
-from sched_model_v2 import (
+from sched_model import (
     System,
     Job,
     fcfs,

@@ -1,6 +1,6 @@
 from hypothesis import given, note, assume, strategies as st
 
-from sched_model_v2 import (
+from sched_model import (
     System,
     Job,
     fcfs,
