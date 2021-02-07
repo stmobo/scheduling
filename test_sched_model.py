@@ -39,12 +39,9 @@ def check_system(system: System):
 
 
 def run_system(system: System, policy):
-    policy(system)
     check_system(system)
 
-    while system.tick():
-        check_system(system)
-        policy(system)
+    while system.tick(policy):
         check_system(system)
 
 
