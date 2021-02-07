@@ -1,4 +1,7 @@
-from hypothesis import given, note, assume, strategies as st
+from hypothesis import given, strategies as st
+from hypothesis.stateful import Bundle, RuleBasedStateMachine, rule, invariant
+import pytest
+
 from avl import AVLTree, TreeNode
 
 
@@ -88,6 +91,74 @@ def verify_tree_integrity(tree: AVLTree, items: dict):
         ), "found incorrect key-value mapping during tree traversal (key {}: got {}, expected {})".format(
             str(k), str(seen_keys[k]), str(v)
         )
+
+
+class AVLTreeStateMachine(RuleBasedStateMachine):
+    def __init__(self):
+        super().__init__()
+        self.tree = AVLTree()
+        self.model = {}
+
+    keys = Bundle("keys")
+    values = Bundle("values")
+
+    @invariant()
+    def check_integrity(self):
+        verify_tree_integrity(self.tree, self.model)
+
+    @rule(target=keys, k=st.integers())
+    def add_key(self, k):
+        return k
+
+    @rule(target=values, v=st.uuids())
+    def add_value(self, v):
+        return v
+
+    @rule(k=keys, v=values)
+    def setitem(self, k, v):
+        self.tree[k] = v
+        self.model[k] = v
+
+    @rule(k=keys)
+    def getitem(self, k):
+        if k not in self.model:
+            with pytest.raises(KeyError):
+                self.tree[k]
+        else:
+            assert self.tree[k] == self.model[k]
+
+    @rule(k=keys)
+    def delitem(self, k):
+        if k not in self.model:
+            with pytest.raises(KeyError):
+                del self.tree[k]
+        else:
+            del self.tree[k]
+            del self.model[k]
+
+    @rule(k=keys)
+    def contains(self, k):
+        assert (k in self.tree) == (k in self.model)
+
+    @rule(k=keys, v=values)
+    def insert_method(self, k, v):
+        assert self.tree.insert(k, v) == self.model.get(k)
+        self.model[k] = v
+
+    @rule(k=keys)
+    def pop(self, k):
+        if k not in self.model:
+            with pytest.raises(KeyError):
+                self.tree.pop(k)
+        else:
+            assert self.tree.pop(k) == self.model.pop(k)
+
+    @rule(k=keys)
+    def get(self, k):
+        assert self.tree.get(k) == self.model.get(k)
+
+
+TestAVLTreeStateMachine = AVLTreeStateMachine.TestCase
 
 
 @given(dict_and_key())  # pylint: disable=no-value-for-parameter
