@@ -91,6 +91,12 @@ class Job(object):
         else:
             return self.start_time + self.runtime
 
+    def __str__(self) -> str:
+        return "Job({})".format(self.job_id)
+
+    def __repr__(self) -> str:
+        return "Job({})".format(self.job_id)
+
 
 class System(object):
     def __init__(self, resources: RscCompatible):
@@ -162,6 +168,7 @@ class System(object):
         if not rsc.valid():
             return False
 
+        # Check resource availability throughout job runtime:
         end_time = self.cur_time + job.runtime
         for node in self._timeline.values(self.cur_time + 1, end_time):
             for job in node.get("start", []):
@@ -194,7 +201,22 @@ class System(object):
                 for j in node.get("end", []):
                     rsvp_rsc += j.resources
 
-                if rsvp_rsc.all_geq(job.resources):
+                # Check resource availability throughout job runtime:
+                tmp_rsc = rsvp_rsc - job.resources
+                if not tmp_rsc.valid():
+                    continue
+
+                for n2 in self._timeline.values(t + 1, t + job.runtime):
+                    for j in n2.get("start", []):
+                        tmp_rsc -= j.resources
+
+                    for j in n2.get("end", []):
+                        tmp_rsc += j.resources
+
+                    if not tmp_rsc.valid():
+                        break
+                else:
+                    # Reservation is valid.
                     rsvp_time = t
                     break
             else:
