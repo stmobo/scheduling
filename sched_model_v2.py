@@ -100,10 +100,10 @@ class System(object):
 
     def _get_timeline_node(self, t: int) -> Dict[str, List[Job]]:
         try:
-            return self._timeline.get(t)
+            return self._timeline[t]
         except KeyError:
             ret = {}
-            self._timeline.insert(t, ret)
+            self._timeline[t] = ret
             return ret
 
     def _insert_timeline_event(self, t: int, tag: str, job: Job):
@@ -235,14 +235,14 @@ def backfill_sched(system: System, max_backfill: int = 1):
 
 
 if __name__ == "__main__":
-    system = System(np.array([5]), fcfs)
+    system = System(np.array([5]), backfill_sched)
 
     system.enqueue_job(Job(10, np.array([2])))
     system.enqueue_job(Job(5, np.array([3])))
     system.enqueue_job(Job(5, np.array([5])))
     system.enqueue_job(Job(1, np.array([3])))
-    system.enqueue_job(Job(2, np.array([1])))
-    system.enqueue_job(Job(3, np.array([2])))
+    system.enqueue_job(Job(3, np.array([1])))
+    system.enqueue_job(Job(2, np.array([2])))
     system.run()
 
     util_vecs = []

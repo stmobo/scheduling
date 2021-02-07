@@ -1,21 +1,16 @@
 from __future__ import annotations
 
+from collections.abc import MutableMapping
 from typing import Any, Generic, TypeVar, Optional, Iterator, Tuple
 
 K = TypeVar("K")
 V = TypeVar("V")
 
 
-class AVLTree(Generic[K, V]):
+class AVLTree(Generic[K, V], MutableMapping):
     def __init__(self):
         self._root: Optional[TreeNode[K, V]] = None
         self._len: int = 0
-
-    def print(self) -> str:
-        if self._root is not None:
-            return self._root.print(0)
-        else:
-            return "<empty tree>"
 
     def insert(self, key: K, val: V) -> Optional[V]:
         if self._root is None:
@@ -28,10 +23,20 @@ class AVLTree(Generic[K, V]):
                 self._len += 1
             return ret
 
-    def get(self, key: K) -> V:
-        if self._root is None:
-            raise KeyError(key)
-        return self._root.get(key)
+    def pop(self, key: K, default: Optional[V] = None) -> Optional[V]:
+        if self._root is not None:
+            try:
+                removed = self._root.get(key)
+                val = removed.val
+                removed.delete()
+                self._len -= 1
+                return val
+            except KeyError:
+                pass
+
+        if default is not None:
+            return default
+        raise KeyError(key)
 
     def _do_iter(
         self,
@@ -85,6 +90,36 @@ class AVLTree(Generic[K, V]):
         for node in it:
             yield node.val
 
+    def print(self) -> str:
+        if self._root is not None:
+            return self._root.print(0)
+        else:
+            return "<empty tree>"
+
+    def __getitem__(self, key: K) -> V:
+        if self._root is None:
+            raise KeyError(key)
+        return self._root.get(key).val
+
+    def __setitem__(self, key: K, val: V):
+        self.insert(key, val)
+
+    def __delitem__(self, key: K):
+        if self._root is None:
+            raise KeyError(key)
+        self._root.get(key).delete()
+        self._len -= 1
+
+    def __contains__(self, key: K) -> bool:
+        if self._root is None:
+            return False
+
+        try:
+            self._root.get(key)
+            return True
+        except KeyError:
+            return False
+
     def __iter__(self) -> Iterator[K]:
         return self.keys()
 
@@ -121,6 +156,20 @@ class TreeNode(Generic[K, V]):
 
     def _is_right_child(self) -> bool:
         return (self._parent is not None) and (self._parent._right == self)
+
+    def _leftmost(self) -> TreeNode[K, V]:
+        if self._left is not None:
+            return self._left._leftmost()
+        return self
+
+    def _successor(self) -> TreeNode[K, V]:
+        if self._right is not None:
+            return self._right._leftmost()
+        return None
+
+    def _copy_data(self, other: TreeNode[K, V]):
+        self.key = other.key
+        self.val = other.val
 
     def _rotate(self):
         parent: TreeNode[K, V] = self._parent
@@ -207,6 +256,49 @@ class TreeNode(Generic[K, V]):
 
         return parent._retrace_insert()
 
+    def _retrace_delete(self):
+        parent: TreeNode[K, V] = self._parent
+        if parent is None:
+            return
+
+        rebalance_required: bool = False
+        sibling: TreeNode[K, V] = None
+
+        if self._is_left_child():
+            parent._balance += 1
+            rebalance_required = parent._balance == 2
+            sibling = parent._right
+        else:
+            parent._balance -= 1
+            rebalance_required = parent._balance == -2
+            sibling = parent._left
+
+        if parent._balance == 0:
+            # Height decrease was not absorbed at parent, but no rotations are
+            # required here. Continue retracing:
+            return parent._retrace_delete()
+        elif rebalance_required:
+            sibling_bal = sibling._balance
+            pivot = parent._rebalance()
+            if sibling_bal != 0:
+                # Height decrease was not absorbed at parent, continue retracing:
+                return pivot._retrace_delete()
+
+        # Otherwise, the previous parent balance was previously zero, and we
+        # can stop retracing here.
+
+    def get(self, key: K) -> TreeNode[K, V]:
+        if self.key == key:
+            return self
+        elif key < self.key:
+            if self._left is not None:
+                return self._left.get(key)
+        else:
+            if self._right is not None:
+                return self._right.get(key)
+
+        raise KeyError(key)
+
     def insert(self, key: K, val: V) -> Optional[V]:
         if self.key == key:
             old_val = self.val
@@ -229,17 +321,28 @@ class TreeNode(Generic[K, V]):
         new_node._retrace_insert()
         return None
 
-    def get(self, key: K) -> V:
-        if self.key == key:
-            return self.val
-        elif key < self.key:
-            if self._left is not None:
-                return self._left.get(key)
+    def delete(self):
+        if self._left is not None and self._right is not None:
+            successor = self._successor()
+            self._copy_data(successor)
+            return successor.delete()
+        elif self._left is not None:
+            self._copy_data(self._left)
+            return self._left.delete()
+        elif self._right is not None:
+            self._copy_data(self._right)
+            return self._right.delete()
         else:
-            if self._right is not None:
-                return self._right.get(key)
+            self._retrace_delete()
 
-        raise KeyError(key)
+            if self._parent is not None:
+                if self._is_left_child():
+                    self._parent._left = None
+                else:
+                    self._parent._right = None
+            else:
+                # this is the root node:
+                self._tree._root = None
 
     def iter(
         self, left_bound: Optional[K] = None, right_bound: Optional[K] = None
