@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import bisect
 from collections import deque
-from functools import reduce
+from functools import reduce, partial
 import numpy as np
 from typing import List, Deque, Optional, Union, Dict, Callable, Iterator, Tuple
 
@@ -61,6 +61,12 @@ class Resources(object):
     def __len__(self) -> int:
         return len(self.resources)
 
+    def __str__(self) -> str:
+        return str(self.resources)
+
+    def __repr__(self) -> str:
+        return "Resources(" + repr(self.resources) + ")"
+
 
 RscCompatible = Union[Resources, np.ndarray]
 
@@ -76,6 +82,7 @@ class Job(object):
 
         self.job_id: Optional[int] = None
         self.start_time: Optional[int] = None
+        self.reserved: bool = False
 
     @property
     def end_time(self) -> Optional[int]:
@@ -86,16 +93,16 @@ class Job(object):
 
 
 class System(object):
-    def __init__(self, resources: Resources, policy: Callable[[System], None]):
+    def __init__(self, resources: RscCompatible):
         self.total_resources: Resources = Resources(resources)
         self.cur_time: int = 0
-        self.sched_policy: Callable[[System], None] = policy
 
         self._cur_resources: Resources = Resources(resources)
         self._jobs_enqueued: int = 0
 
         self.pending_jobs: Deque[Job] = deque()
         self.finished_jobs: Deque[Job] = deque()
+        self.reserved_jobs: List[Job] = []
         self._timeline: AVLTree[int, Dict[str, List[Job]]] = AVLTree()
 
     def _get_timeline_node(self, t: int) -> Dict[str, List[Job]]:
@@ -113,7 +120,20 @@ class System(object):
         else:
             tm[tag] = [job]
 
+    def _remove_timeline_event(self, t: int, tag: str, job: Job):
+        tm = self._get_timeline_node(t)
+        tm[tag].remove(job)
+
+        if len(tm[tag]) == 0:
+            del tm[tag]
+
+        if len(tm) == 0:
+            del self._timeline[t]
+
     def enqueue_job(self, job: Job):
+        if not self.total_resources.all_geq(job.resources):
+            raise ValueError("Job resource requirements cannot be satisfied")
+
         job.job_id = self._jobs_enqueued
         self._jobs_enqueued += 1
         self.pending_jobs.append(job)
@@ -138,11 +158,22 @@ class System(object):
         return rsc
 
     def can_schedule(self, job: Job) -> bool:
-        if not self._cur_resources.all_geq(job.resources):
+        rsc = self._cur_resources - job.resources
+        if not rsc.valid():
             return False
 
-        end_resources = self.available_resources_at(self.cur_time + job.runtime)
-        return end_resources.all_geq(job.resources)
+        end_time = self.cur_time + job.runtime
+        for node in self._timeline.values(self.cur_time + 1, end_time):
+            for job in node.get("start", []):
+                rsc -= job.resources
+
+            for job in node.get("end", []):
+                rsc += job.resources
+
+            if not rsc.valid():
+                return False
+
+        return True
 
     def start_job(self, job: Job, reserve: bool) -> int:
         if self.can_schedule(job):
@@ -170,12 +201,24 @@ class System(object):
                 raise RuntimeError("Could not find reserve time for job")
 
             job.start_time = rsvp_time
+            job.reserved = True
             self._insert_timeline_event(rsvp_time, "start", job)
             self._insert_timeline_event(job.end_time, "end", job)
+            self.reserved_jobs.append(job)
 
             return Job.RESERVED
 
         return Job.PENDING
+
+    def unreserve_all_jobs(self):
+        self.reserved_jobs.sort(key=lambda j: j.job_id, reverse=True)
+        for j in self.reserved_jobs:
+            self._remove_timeline_event(j.start_time, "start", j)
+            self._remove_timeline_event(j.end_time, "end", j)
+            j.start_time = None
+            j.reserved = False
+            self.pending_jobs.appendleft(j)
+        self.reserved_jobs = []
 
     def tick(self):
         try:
@@ -189,16 +232,16 @@ class System(object):
 
         for j in node.get("start", []):
             self._cur_resources -= j.resources
-
-        assert self.total_resources.all_geq(self._cur_resources)
-        assert self._cur_resources.valid()
+            if j.reserved:
+                self.reserved_jobs.remove(j)
+                j.reserved = False
 
         return True
 
-    def run(self):
-        self.sched_policy(self)
+    def run(self, sched_policy: Callable[[System], None]):
+        sched_policy(self)
         while self.tick():
-            self.sched_policy(self)
+            sched_policy(self)
 
 
 def fcfs(system: System):
@@ -211,14 +254,16 @@ def fcfs(system: System):
         system.pending_jobs.popleft()
 
 
-def backfill_sched(system: System, max_backfill: int = 1):
+def _backfill_sched(max_backfill: Optional[int], system: System):
     cur_reserved = 0
     new_pending = deque()
+
+    system.unreserve_all_jobs()
 
     while len(system.pending_jobs) > 0:
         j = system.pending_jobs.popleft()
 
-        if cur_reserved < max_backfill:
+        if max_backfill is None or (cur_reserved < max_backfill):
             status = system.start_job(j, True)
 
             assert status != Job.PENDING
@@ -234,16 +279,24 @@ def backfill_sched(system: System, max_backfill: int = 1):
     system.pending_jobs = new_pending
 
 
+easy_backfill = partial(_backfill_sched, 1)
+conservative_backfill = partial(_backfill_sched, None)
+
+
+def hybrid_backfill(max_backfill: int) -> Callable[[System], None]:
+    return partial(_backfill_sched, max_backfill)
+
+
 if __name__ == "__main__":
-    system = System(np.array([5]), backfill_sched)
+    system = System(np.array([5]))
 
     system.enqueue_job(Job(10, np.array([2])))
     system.enqueue_job(Job(5, np.array([3])))
     system.enqueue_job(Job(5, np.array([5])))
-    system.enqueue_job(Job(1, np.array([3])))
+    system.enqueue_job(Job(3, np.array([3])))
     system.enqueue_job(Job(3, np.array([1])))
     system.enqueue_job(Job(2, np.array([2])))
-    system.run()
+    system.run(easy_backfill)
 
     util_vecs = []
     cur_jobs = []
