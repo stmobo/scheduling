@@ -153,6 +153,52 @@ class AVLTreeStateMachine(RuleBasedStateMachine):
         else:
             assert self.tree.pop(k) == self.model.pop(k)
 
+    @rule()
+    def min(self):
+        if len(self.model) == 0:
+            with pytest.raises(IndexError):
+                self.tree.min()
+        else:
+            s = sorted(self.model.keys())
+            k = s[0]
+            v = self.model[k]
+            assert self.tree.min() == (k, v)
+
+    @rule()
+    def max(self):
+        if len(self.model) == 0:
+            with pytest.raises(IndexError):
+                self.tree.max()
+        else:
+            s = sorted(self.model.keys())
+            k = s[-1]
+            v = self.model[k]
+            assert self.tree.max() == (k, v)
+
+    @rule()
+    def pop_min(self):
+        if len(self.model) == 0:
+            with pytest.raises(IndexError):
+                self.tree.pop_min()
+        else:
+            s = sorted(self.model.keys())
+            k = s[0]
+            v = self.model[k]
+            assert self.tree.pop_min() == (k, v)
+            del self.model[k]
+
+    @rule()
+    def pop_max(self):
+        if len(self.model) == 0:
+            with pytest.raises(IndexError):
+                self.tree.pop_max()
+        else:
+            s = sorted(self.model.keys())
+            k = s[-1]
+            v = self.model[k]
+            assert self.tree.pop_max() == (k, v)
+            del self.model[k]
+
     @rule(k=keys)
     def get(self, k):
         assert self.tree.get(k) == self.model.get(k)
