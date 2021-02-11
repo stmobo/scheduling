@@ -2,7 +2,9 @@ from hypothesis import given, strategies as st
 from hypothesis.stateful import Bundle, RuleBasedStateMachine, rule, invariant
 import pytest
 
-from avl import AVLTree, TreeNode
+from tree.base import Tree
+from tree.rb import RBTree, RBNode
+from tree.avl import AVLTree, AVLNode
 
 
 @st.composite
@@ -33,7 +35,58 @@ def dict_and_subset(draw, keys=st.integers(), values=st.uuids()):
     return (d, subset, lower_bound, upper_bound)
 
 
-def verify_node_integrity(cur: TreeNode, seen_keys: dict) -> int:
+def verify_rb_integrity(cur: RBNode, seen_keys: dict) -> int:
+    assert cur.key not in seen_keys, "encountered loop in tree pointers at node " + str(
+        cur.key
+    )
+    seen_keys[cur.key] = cur.val
+
+    if cur._left is not None:
+        assert (not cur._red) or (
+            not cur._left._red
+        ), "Red node {} has red left child {}".format(str(cur.key), str(cur._left.key))
+
+        assert (
+            cur._left._parent == cur
+        ), "parent <> left child link broken at node {} (child = {})".format(
+            str(cur.key), str(cur._left.key)
+        )
+
+        left_blk_height = verify_rb_integrity(cur._left, seen_keys)
+    else:
+        left_blk_height = 1
+
+    if cur._right is not None:
+        assert (not cur._red) or (
+            not cur._right._red
+        ), "Red node {} has red right child {}".format(
+            str(cur.key), str(cur._right.key)
+        )
+
+        assert (
+            cur._right._parent == cur
+        ), "parent <> right child link broken at node {} (child = {})".format(
+            str(cur.key), str(cur._right.key)
+        )
+        right_blk_height = verify_rb_integrity(cur._right, seen_keys)
+    else:
+        right_blk_height = 1
+
+    # Verify balance constraint
+    assert (
+        left_blk_height == right_blk_height
+    ), "Left and right subtrees have different black heights ({} != {})".format(
+        left_blk_height, right_blk_height
+    )
+
+    # Return black height of this subtree
+    if cur._red:
+        return left_blk_height
+    else:
+        return left_blk_height + 1
+
+
+def verify_avl_integrity(cur: AVLNode, seen_keys: dict) -> int:
     assert cur.key not in seen_keys, "encountered loop in tree pointers at node " + str(
         cur.key
     )
@@ -45,7 +98,7 @@ def verify_node_integrity(cur: TreeNode, seen_keys: dict) -> int:
         ), "parent <> left child link broken at node {} (child = {})".format(
             str(cur.key), str(cur._left.key)
         )
-        left_height = verify_node_integrity(cur._left, seen_keys)
+        left_height = verify_avl_integrity(cur._left, seen_keys)
     else:
         left_height = 0
 
@@ -55,7 +108,7 @@ def verify_node_integrity(cur: TreeNode, seen_keys: dict) -> int:
         ), "parent <> right child link broken at node {} (child = {})".format(
             str(cur.key), str(cur._right.key)
         )
-        right_height = verify_node_integrity(cur._right, seen_keys)
+        right_height = verify_avl_integrity(cur._right, seen_keys)
     else:
         right_height = 0
 
@@ -71,7 +124,11 @@ def verify_node_integrity(cur: TreeNode, seen_keys: dict) -> int:
 def verify_tree_integrity(tree: AVLTree, items: dict):
     seen_keys = {}
     if tree._root is not None:
-        verify_node_integrity(tree._root, seen_keys)
+        if isinstance(tree._root, AVLNode):
+            verify_avl_integrity(tree._root, seen_keys)
+        elif isinstance(tree._root, RBNode):
+            assert not tree._root._red, "RBTree root is not black"
+            verify_rb_integrity(tree._root, seen_keys)
 
     assert len(seen_keys) == len(
         items
@@ -93,10 +150,10 @@ def verify_tree_integrity(tree: AVLTree, items: dict):
         )
 
 
-class AVLTreeStateMachine(RuleBasedStateMachine):
+class TreeStateMachine(RuleBasedStateMachine):
     def __init__(self):
         super().__init__()
-        self.tree = AVLTree()
+        self.tree = Tree()
         self.model = {}
 
     keys = Bundle("keys")
@@ -204,11 +261,25 @@ class AVLTreeStateMachine(RuleBasedStateMachine):
         assert self.tree.get(k) == self.model.get(k)
 
 
+class AVLTreeStateMachine(TreeStateMachine):
+    def __init__(self):
+        super().__init__()
+        self.tree = AVLTree()
+
+
+class RBTreeStateMachine(TreeStateMachine):
+    def __init__(self):
+        super().__init__()
+        self.tree = RBTree()
+
+
 TestAVLTreeStateMachine = AVLTreeStateMachine.TestCase
+TestRBTreeStateMachine = RBTreeStateMachine.TestCase
 
 
+@pytest.mark.parametrize("tree_type", [AVLTree, RBTree])
 @given(dict_and_key())  # pylint: disable=no-value-for-parameter
-def test_insert_positive(givens):
+def test_insert_positive(tree_type, givens):
     items, test_key = givens
     tree = AVLTree()
 
@@ -219,8 +290,9 @@ def test_insert_positive(givens):
     assert tree[test_key] == items[test_key]
 
 
+@pytest.mark.parametrize("tree_type", [AVLTree, RBTree])
 @given(dict_and_key())  # pylint: disable=no-value-for-parameter
-def test_delete(givens):
+def test_delete(tree_type, givens):
     items, test_key = givens
     tree = AVLTree()
 
@@ -232,8 +304,9 @@ def test_delete(givens):
     verify_tree_integrity(tree, items)
 
 
+@pytest.mark.parametrize("tree_type", [AVLTree, RBTree])
 @given(dict_and_key())  # pylint: disable=no-value-for-parameter
-def test_nonexistent_key(givens):
+def test_nonexistent_key(tree_type, givens):
     items, test_key = givens
     tree = AVLTree()
 
@@ -256,8 +329,9 @@ def test_nonexistent_key(givens):
     assert test_key not in tree
 
 
+@pytest.mark.parametrize("tree_type", [AVLTree, RBTree])
 @given(dict_and_key())  # pylint: disable=no-value-for-parameter
-def test_pop(givens):
+def test_pop(tree_type, givens):
     items, test_key = givens
     tree = AVLTree()
 
@@ -267,8 +341,9 @@ def test_pop(givens):
     assert tree.pop(test_key) == items.pop(test_key)
 
 
+@pytest.mark.parametrize("tree_type", [AVLTree, RBTree])
 @given(st.dictionaries(st.integers(), st.uuids()))
-def test_iter(items):
+def test_iter(tree_type, items):
     keys = sorted(items.keys())
     tree = AVLTree()
 
@@ -284,7 +359,8 @@ def test_iter(items):
 
 
 @given(st.dictionaries(st.integers(), st.uuids()))
-def test_iter_reverse(items):
+@pytest.mark.parametrize("tree_type", [AVLTree, RBTree])
+def test_iter_reverse(tree_type, items):
     keys = sorted(items.keys(), reverse=True)
     tree = AVLTree()
 
@@ -300,8 +376,9 @@ def test_iter_reverse(items):
 
 
 @given(dict_and_subset())  # pylint: disable=no-value-for-parameter
-def test_iter_bounds(g):
-    items, subset, lower_bound, upper_bound = g
+@pytest.mark.parametrize("tree_type", [AVLTree, RBTree])
+def test_iter_bounds(tree_type, givens):
+    items, subset, lower_bound, upper_bound = givens
     tree = AVLTree()
 
     for k, v in items.items():
@@ -316,8 +393,9 @@ def test_iter_bounds(g):
 
 
 @given(dict_and_subset())  # pylint: disable=no-value-for-parameter
-def test_iter_bounds_reverse(g):
-    items, subset, lower_bound, upper_bound = g
+@pytest.mark.parametrize("tree_type", [AVLTree, RBTree])
+def test_iter_bounds_reverse(tree_type, givens):
+    items, subset, lower_bound, upper_bound = givens
     tree = AVLTree()
 
     for k, v in items.items():

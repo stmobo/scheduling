@@ -6,7 +6,7 @@ from functools import reduce, partial
 import numpy as np
 from typing import List, Deque, Optional, Union, Dict, Callable, Iterator, Tuple, Set
 
-from avl import AVLTree
+from tree import RBTree
 
 
 class Resources(object):
@@ -170,7 +170,7 @@ class System(object):
         self.pending_jobs: Deque[Job] = deque()
         self.finished_jobs: Deque[Job] = deque()
         self.reserved_jobs: List[Job] = []
-        self._timeline: AVLTree[int, Dict[str, List[Job]]] = AVLTree()
+        self._timeline: RBTree[int, Dict[str, List[Job]]] = RBTree()
 
     def _get_timeline_node(self, t: int) -> Dict[str, List[Job]]:
         try:
@@ -429,14 +429,15 @@ def hybrid_backfill(max_backfill: int) -> Callable[[System], None]:
 
 
 if __name__ == "__main__":
-    system = System(np.array([5]))
+    system = System(np.array([6]))
 
-    system.enqueue_job(Job(10, np.array([2])))
-    system.enqueue_job(Job(5, np.array([3])))
-    system.enqueue_job(Job(5, np.array([5])))
-    system.enqueue_job(Job(3, np.array([3])))
+    system.enqueue_job(Job(2, np.array([1])))
     system.enqueue_job(Job(3, np.array([1])))
-    system.enqueue_job(Job(2, np.array([2])))
+    system.enqueue_job(Job(5, np.array([2])))
+    system.enqueue_job(Job(2, np.array([6])))
+    system.enqueue_job(Job(1, np.array([1])))
+    system.enqueue_job(Job(1, np.array([1])))
+    system.enqueue_job(Job(1, np.array([1])))
     system.run(easy_backfill)
 
     util_vecs = []
