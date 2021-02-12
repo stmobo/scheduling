@@ -14,6 +14,9 @@ class Resources(object):
     def valid(self) -> bool:
         return (self.resources >= 0).all()
 
+    def zeros_like(self) -> Resources:
+        return Resources(np.zeros_like(self.resources))
+
     @staticmethod
     def _resource_vec(val: RscCompatible) -> np.ndarray:
         """Gets the `resources` vector out of a Resources object, and leaves

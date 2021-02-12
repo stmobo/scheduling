@@ -39,7 +39,7 @@ def verify_rb_integrity(cur: RBNode, seen_keys: dict) -> int:
     assert cur.key not in seen_keys, "encountered loop in tree pointers at node " + str(
         cur.key
     )
-    seen_keys[cur.key] = cur.val
+    seen_keys[cur.key] = cur.value
 
     if cur._left is not None:
         assert (not cur._red) or (
@@ -90,7 +90,7 @@ def verify_avl_integrity(cur: AVLNode, seen_keys: dict) -> int:
     assert cur.key not in seen_keys, "encountered loop in tree pointers at node " + str(
         cur.key
     )
-    seen_keys[cur.key] = cur.val
+    seen_keys[cur.key] = cur.value
 
     if cur._left is not None:
         assert (

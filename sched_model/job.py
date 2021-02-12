@@ -79,6 +79,8 @@ class Job(object):
         self.start_time = system.cur_time
         self.deadline = system.cur_time + self.timelimit
         self.end_time = system.cur_time + int(self.compute_actual_runtime(system))
+        if self.end_time > self.deadline:
+            self.end_time = self.deadline
         self._state = Job.STARTED
 
     def end(self, end_time: int):
@@ -91,3 +93,9 @@ class Job(object):
 
     def __repr__(self) -> str:
         return self.__str__()
+
+    def __eq__(self, other: Job) -> bool:
+        return self._job_id == other._job_id
+
+    def __hash__(self) -> int:
+        return hash(self._job_id)

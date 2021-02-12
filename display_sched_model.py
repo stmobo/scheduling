@@ -9,43 +9,60 @@ from sched_model import (
     hybrid_backfill,
 )
 
-if __name__ == "__main__":
-    system = System(np.array([6]))
 
-    system.enqueue_job(Job(2, np.array([1])))
-    system.enqueue_job(Job(3, np.array([1])))
-    system.enqueue_job(Job(5, np.array([2])))
-    system.enqueue_job(Job(2, np.array([6])))
-    system.enqueue_job(Job(1, np.array([1])))
-    system.enqueue_job(Job(1, np.array([1])))
-    system.enqueue_job(Job(1, np.array([1])))
-    system.run(easy_backfill)
-
+def display_system(system: System):
     util_vecs = []
     cur_jobs = []
 
     for t, node in system.iter_timeline():
         s = ""
 
-        if "start" in node:
-            s = "started job{} {}".format(
-                "s" if len(node["start"]) > 1 else "",
-                ", ".join(map(lambda j: str(j.job_id), node["start"])),
-            )
+        if len(node.start) > 0:
+            reserved = list(filter(lambda j: j.is_reserved, node.start))
+            running = list(filter(lambda j: not j.is_reserved, node.start))
 
-            for j in node["start"]:
+            if len(reserved) > 0:
+                s += "reserved job{} {}".format(
+                    "s" if len(reserved) > 1 else "",
+                    ", ".join(map(lambda j: str(j.job_id), reserved)),
+                )
+
+            if len(running) > 0:
+                if len(s) > 0:
+                    s += " / "
+
+                s += "started job{} {}".format(
+                    "s" if len(running) > 1 else "",
+                    ", ".join(map(lambda j: str(j.job_id), running)),
+                )
+
+            for j in node.start:
                 cur_jobs.append(j)
 
-        if "end" in node:
-            if "start" in node:
+        if len(node.expired) > 0:
+            if len(s) > 0:
+                s += " / "
+
+            s += "job{} {} expire{}".format(
+                "s" if len(node.expired) > 1 else "",
+                ", ".join(map(lambda j: str(j.job_id), node.expired)),
+                "s" if len(node.expired) == 1 else "",
+            )
+
+            for j in node.expired:
+                cur_jobs.remove(j)
+
+        ended_jobs = node.end - node.expired
+        if len(ended_jobs) > 0:
+            if len(s) > 0:
                 s += " / "
 
             s += "finished job{} {}".format(
-                "s" if len(node["end"]) > 1 else "",
-                ", ".join(map(lambda j: str(j.job_id), node["end"])),
+                "s" if len(ended_jobs) > 1 else "",
+                ", ".join(map(lambda j: str(j.job_id), ended_jobs)),
             )
 
-            for j in node["end"]:
+            for j in ended_jobs:
                 cur_jobs.remove(j)
 
         util_vecs.append((t, list(cur_jobs), s))
@@ -79,8 +96,49 @@ if __name__ == "__main__":
             else:
                 end = "\n"
 
-            print("{:<4d} |".format(t) + util_bar, end=end)
+            prefix = "{:>2d} |".format(t)
+            if t == system.cur_time:
+                prefix = "> " + prefix
+            else:
+                prefix = "  " + prefix
+
+            print(prefix + util_bar, end=end)
 
         prev_tm = tm
         prev_jobs = job_list
         prev_msg = msg
+
+    if system.cur_time == tm:
+        s = "> {:>2d} |".format(system.cur_time)
+        for max_util in system.total_resources:
+            s += ("." * max_util) + "|"
+        s += " (workflow complete)"
+        print(s)
+
+
+if __name__ == "__main__":
+    system = System(np.array([6]))
+
+    system.enqueue_job(Job(2, np.array([1])))
+    system.enqueue_job(Job(3, np.array([1])))
+    system.enqueue_job(Job(5, np.array([2])))
+    system.enqueue_job(Job(4, np.array([6])))
+    system.enqueue_job(Job(3, np.array([1])))
+    system.enqueue_job(Job(5, np.array([2])))
+    system.enqueue_job(Job(1, np.array([3])))
+    system.enqueue_job(Job(2, np.array([4])))
+    system.enqueue_job(Job(1, np.array([1])))
+    sched_policy = easy_backfill
+
+    i = 1
+    while True:
+        system.run_sched_loop(sched_policy)
+
+        print("Scheduler loop {} (t={}):".format(i, system.cur_time))
+        display_system(system)
+        print("\n")
+        i += 1
+
+        if not system.handle_events():
+            break
+

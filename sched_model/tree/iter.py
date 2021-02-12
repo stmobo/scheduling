@@ -15,6 +15,7 @@ class TreeIter(object):
     KEYS = 0
     VALS = 1
     ITEMS = 2
+    NODES = 3
 
     def __init__(
         self,
@@ -60,6 +61,8 @@ class TreeIter(object):
         if self._mode == TreeIter.KEYS:
             return cur_node.key
         elif self._mode == TreeIter.VALS:
-            return cur_node.val
-        else:
-            return (cur_node.key, cur_node.val)
+            return cur_node.value
+        elif self._mode == TreeIter.ITEMS:
+            return (cur_node.key, cur_node.value)
+        elif self._mode == TreeIter.NODES:
+            return cur_node

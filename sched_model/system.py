@@ -1,11 +1,165 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import List, Deque, Optional, Dict, Callable, Iterator, Tuple
+from typing import List, Deque, Optional, Dict, Callable, Iterator, Tuple, Set
 
 from .resource import Resources, RscCompatible
 from .job import Job
 from .tree import RBTree
+from .tree.base import TreeNode
+
+
+class TimelineData(object):
+    def __init__(self, resources: Resources):
+        self.start: Set[Job] = set()
+        self.end: Set[Job] = set()
+        self.expired: Set[Job] = set()
+        self.resources: Resources = Resources(resources)
+
+
+class Timeline(object):
+    def __init__(self, base_resources: Resources):
+        self._total_resources: Resources = Resources(base_resources)
+        self._tree: RBTree[int, TimelineData] = RBTree()
+
+    def _get_data(self, t: int) -> TreeNode[int, TimelineData]:
+        insert, tree_node = self._tree.get_or_insert_node(t)
+        if insert:
+            if tree_node.prev is not None:
+                prev_data: TimelineData = tree_node.prev.value
+                prev_rsc = prev_data.resources
+            else:
+                prev_rsc = self._total_resources
+            tree_node.value = TimelineData(prev_rsc)
+        return tree_node
+
+    def _insert_start_event(self, t: int, job: Job):
+        node = self._get_data(t)
+        data: TimelineData = node.value
+        data.start.add(job)
+
+    def _insert_expire_event(self, t: int, job: Job):
+        node = self._get_data(t)
+        data: TimelineData = node.value
+        data.expired.add(job)
+
+    def _insert_end_event(self, t: int, job: Job):
+        node = self._get_data(t)
+        data: TimelineData = node.value
+        data.end.add(job)
+
+    def _cleanup_node(self, node: TreeNode[int, TimelineData]):
+        k = node.key
+        data: TimelineData = node.value
+        if len(data.end) == 0 and len(data.expired) == 0 and len(data.start) == 0:
+            del self._tree[k]
+
+    def _remove_start_event(self, t: int, job: Job):
+        node = self._get_data(t)
+        data: TimelineData = node.value
+        data.start.remove(job)
+        self._cleanup_node(node)
+
+    def _remove_expire_event(self, t: int, job: Job):
+        node = self._get_data(t)
+        data: TimelineData = node.value
+        data.expired.remove(job)
+        self._cleanup_node(node)
+
+    def _remove_end_event(self, t: int, job: Job):
+        node = self._get_data(t)
+        data: TimelineData = node.value
+        data.end.remove(job)
+        self._cleanup_node(node)
+
+    def add_job_reservation(self, job: Job):
+        self._insert_start_event(job.start_time, job)
+        self._insert_expire_event(job.deadline, job)
+
+        for tl_node in self._tree.values(job.start_time, job.deadline):
+            tl_node.resources -= job.resources
+
+    def remove_job_reservation(self, job: Job):
+        self._remove_start_event(job.start_time, job)
+        self._remove_expire_event(job.deadline, job)
+
+        for tl_node in self._tree.values(job.start_time, job.deadline):
+            tl_node.resources += job.resources
+
+    def start_job_reservation(self, job: Job):
+        self._insert_end_event(job.end_time, job)
+
+    def end_job_reservation(self, job: Job, new_end_time: int):
+        prev_end_time = job.end_time
+        prev_deadline = job.deadline
+
+        assert new_end_time <= prev_deadline
+        assert new_end_time <= prev_end_time
+
+        if new_end_time < prev_end_time:
+            self._insert_end_event(new_end_time, job)
+            self._remove_end_event(prev_end_time, job)
+
+        if new_end_time < prev_deadline:
+            for node_data in self._tree.values(new_end_time, prev_deadline):
+                node_data.resources += job.resources
+
+        self._remove_expire_event(prev_deadline, job)
+
+    def iter_resources(
+        self, start_time: int, end_time: Optional[int] = None, copy: bool = True
+    ) -> Iterator[Tuple[int, Resources]]:
+        if len(self._tree) == 0:
+            yield (start_time, self._total_resources.clone())
+            return
+
+        iter_start_key = self._tree.upper_bound(start_time + 1)
+        if iter_start_key is not None:
+            iter_start_key = iter_start_key[0]
+
+        for t, data in self._tree.items(iter_start_key, end_time):
+            if copy:
+                yield (max(start_time, t), data.resources.clone())
+            else:
+                yield (max(start_time, t), data.resources)
+
+    def can_schedule(self, job: Job, start_time: int) -> bool:
+        if len(self._tree) == 0:
+            return True
+
+        return all(
+            rsc.all_geq(job.resources)
+            for _, rsc in self.iter_resources(start_time, start_time + job.timelimit)
+        )
+
+    def find_schedulable_time(
+        self, job: Job, start_time: int, reserve: bool
+    ) -> Optional[int]:
+        if len(self._tree) == 0:
+            return start_time
+
+        iter_start_key = self._tree.upper_bound(start_time + 1)
+        if iter_start_key is not None:
+            iter_start_key = iter_start_key[0]
+
+        for iter_t in self._tree.keys(iter_start_key, None):
+            if (not reserve) and (iter_t > start_time):
+                return None
+
+            cur_t = max(start_time, iter_t)
+            for data in self._tree.values(iter_t, cur_t + job.timelimit):
+                if not data.resources.all_geq(job.resources):
+                    break
+            else:
+                return cur_t
+        else:
+            raise RuntimeError("could not find job scheduling time")
+
+    def iter(self, *args, **kwargs) -> Iterator[Tuple[int, TimelineData]]:
+        return self._tree.items(*args, **kwargs)
+
+    def next_event(self, after_time: int) -> Optional[Tuple[int, TimelineData]]:
+        return self._tree.lower_bound(after_time + 1)
 
 
 class System(object):
@@ -13,44 +167,20 @@ class System(object):
         self.total_resources: Resources = Resources(resources)
         self.cur_time: int = 0
 
-        self._cur_resources: Resources = Resources(resources)
         self._jobs_enqueued: int = 0
         self._should_run_sched_loop: bool = False
 
         self.pending_jobs: Deque[Job] = deque()
         self.finished_jobs: Deque[Job] = deque()
         self.reserved_jobs: List[Job] = []
-        self._timeline: RBTree[int, Dict[str, List[Job]]] = RBTree()
+        self._timeline: Timeline = Timeline(self.total_resources)
 
-    def _get_timeline_node(self, t: int) -> Dict[str, List[Job]]:
-        try:
-            return self._timeline[t]
-        except KeyError:
-            ret = {}
-            self._timeline[t] = ret
-            return ret
+    @property
+    def should_run_sched_loop(self) -> bool:
+        return self._should_run_sched_loop
 
-    def _insert_timeline_event(self, t: int, tag: str, job: Job):
-        tm = self._get_timeline_node(t)
-        if tag in tm:
-            tm[tag].append(job)
-        else:
-            tm[tag] = [job]
-
-    def _remove_timeline_event(self, t: int, tag: str, job: Job):
-        tm = self._get_timeline_node(t)
-        tm[tag].remove(job)
-
-        if len(tm[tag]) == 0:
-            del tm[tag]
-
-        if len(tm) == 0:
-            del self._timeline[t]
-
-    def iter_timeline(
-        self, *args, **kwargs
-    ) -> Iterator[Tuple[int, Dict[str, List[Job]]]]:
-        return self._timeline.items(*args, **kwargs)
+    def iter_timeline(self, *args, **kwargs) -> Iterator[Tuple[int, TimelineData]]:
+        return self._timeline.iter(*args, **kwargs)
 
     def enqueue_job(self, job: Job):
         """Push a `NEW` job onto the pending job queue."""
@@ -80,12 +210,10 @@ class System(object):
             self.reserved_jobs.remove(job)
 
         job.start(self)
-        self._cur_resources -= job.resources
-        self._insert_timeline_event(job.end_time, "end", job)
-
         if not was_reserved:
-            self._insert_timeline_event(self.cur_time, "start", job)
-            self._insert_timeline_event(job.deadline, "expiration", job)
+            self._timeline.add_job_reservation(job)
+        self._timeline.start_job_reservation(job)
+
         self._should_run_sched_loop = True
 
     def _end_job(self, job: Job):
@@ -98,12 +226,7 @@ class System(object):
         assert self.cur_time >= job.start_time
         assert job.is_running
 
-        if self.cur_time != job.end_time:
-            self._insert_timeline_event(self.cur_time, "end", job)
-            self._remove_timeline_event(job.end_time, "end", job)
-
-        self._cur_resources += job.resources
-        self._remove_timeline_event(job.deadline, "expiration", job)
+        self._timeline.end_job_reservation(job, self.cur_time)
         job.end(self.cur_time)
         self.finished_jobs.append(job)
         self._should_run_sched_loop = True
@@ -114,8 +237,7 @@ class System(object):
         assert job.is_pending
 
         job.reserve(t)
-        self._insert_timeline_event(t, "start", job)
-        self._insert_timeline_event(job.deadline, "expiration", job)
+        self._timeline.add_job_reservation(job)
         self.reserved_jobs.append(job)
 
     def unreserve_all_jobs(self):
@@ -128,73 +250,61 @@ class System(object):
         for j in self.reserved_jobs:
             assert j.is_reserved
 
-            self._remove_timeline_event(j.start_time, "start", j)
-            self._remove_timeline_event(j.deadline, "expiration", j)
+            self._timeline.remove_job_reservation(j)
             j.unreserve()
             self.pending_jobs.appendleft(j)
 
         self.reserved_jobs = []
 
-    def _iter_timeline_resources(
-        self, start_rsc: Resources, start_time: int, end_time: Optional[int] = None
-    ) -> Iterator[Tuple[int, Resources]]:
-        """Walk through the timeline, yielding projected available resources.
-        
-        This method yields _projected_ resources; it deliberately does not use
-        "end" events (which are based on actual runtimes) and only looks at
-        "expiration" events (which indicate deadlines).
-        """
-        rsc = start_rsc.clone()
-
-        for t, node in self._timeline.items(start_time + 1, end_time):
-            for j in node.get("start", []):
-                rsc -= j.resources
-
-            for j in node.get("expiration", []):
-                rsc += j.resources
-
-            yield (t, rsc.clone())
-
-    def can_schedule(self, job: Job, start_rsc: Resources, start_time: int) -> bool:
+    def can_schedule(self, job: Job, start_time: int) -> bool:
         """Check whether a job can be started at a given time."""
-        rsc = start_rsc - job.resources
-        if not rsc.valid():
-            return False
-
-        # Check resource availability throughout job runtime:
-        end_time = start_time + job.timelimit
-        for _, rsc in self._iter_timeline_resources(rsc, start_time, end_time):
-            if not rsc.valid():
-                return False
-        return True
+        return self._timeline.can_schedule(job, start_time)
 
     def start_or_reserve_job(self, job: Job, reserve: bool) -> int:
         """Try to start a job, optionally creating a reservation if not possible.
         
         This method returns the new state of the job.
         """
-        if self.can_schedule(job, self._cur_resources, self.cur_time):
+
+        schedule_tm = self._timeline.find_schedulable_time(job, self.cur_time, reserve)
+
+        if schedule_tm is None:
+            return Job.PENDING
+        elif schedule_tm > self.cur_time:
+            self._reserve_job(job, schedule_tm)
+            return Job.RESERVED
+        elif schedule_tm == self.cur_time:
             self._start_job(job)
             return Job.STARTED
-        elif reserve:
-            rsvp_time = -1
-            for t, rsc in self._iter_timeline_resources(
-                self._cur_resources, self.cur_time
-            ):
-                if self.can_schedule(job, rsc, t):
-                    # Would calling _reserve_job directly here cause problems?
-                    # _reserve_job modifies the timeline, and we're iterating
-                    # over it, but on the other hand we also would just return
-                    # immediately. To be safe, we break here.
-                    rsvp_time = t
-                    break
-            else:
-                raise RuntimeError("Could not find time for job reservation")
-
-            self._reserve_job(job, rsvp_time)
-            return Job.RESERVED
         else:
-            return Job.PENDING
+            raise RuntimeError("Job was scheduled in the past?")
+
+    def run_sched_loop(self, sched_policy: Callable[[System], None]):
+        if self._should_run_sched_loop:
+            sched_policy(self)
+            self._should_run_sched_loop = False
+
+    def handle_events(self):
+        try:
+            self.cur_time, node = self._timeline.next_event(self.cur_time)
+        except TypeError:
+            return False
+
+        # note: these methods may modify the lists in this node, so iterate over
+        # copies of the lists in this node instead
+
+        for j in list(node.start):
+            assert j.is_reserved
+            self._start_job(j)
+
+        for j in list(node.end):
+            self._end_job(j)
+
+        for j in list(node.expired):
+            self._end_job(j)
+
+        self._should_run_sched_loop = True
+        return True
 
     def tick(self, sched_policy: Callable[[System], None]):
         """Advance to the next timestep, handle job events, and run scheduler
@@ -203,32 +313,10 @@ class System(object):
         Returns whether there was a next timestep to advance to.
         (If you are calling this in a loop, you can stop once this returns False.)
         """
-        if self._should_run_sched_loop:
-            sched_policy(self)
-            self._should_run_sched_loop = False
-
-        try:
-            self.cur_time, node = next(self._timeline.items(self.cur_time + 1))
-        except StopIteration:
-            return False
-
-        # note: these methods may modify the lists in this node, so iterate over
-        # copies of the lists in this node instead
-
-        for j in list(node.get("start", [])):
-            assert j.is_reserved
-            self._start_job(j)
-
-        for j in list(node.get("end", [])):
-            self._end_job(j)
-
-        for j in list(node.get("expiration", [])):
-            self._end_job(j)
-
-        sched_policy(self)
-        self._should_run_sched_loop = False
-
-        return True
+        self.run_sched_loop(sched_policy)
+        if self.handle_events():
+            self.run_sched_loop(sched_policy)
+            return True
 
     def run(self, sched_policy: Callable[[System], None]):
         while self.tick(sched_policy):
