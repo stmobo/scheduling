@@ -2,9 +2,9 @@ from hypothesis import given, strategies as st
 from hypothesis.stateful import Bundle, RuleBasedStateMachine, rule, invariant
 import pytest
 
-from tree.base import Tree
-from tree.rb import RBTree, RBNode
-from tree.avl import AVLTree, AVLNode
+from sched_model.tree.base import Tree
+from sched_model.tree.rb import RBTree, RBNode
+from sched_model.tree.avl import AVLTree, AVLNode
 
 
 @st.composite
